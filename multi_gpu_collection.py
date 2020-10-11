@@ -8,7 +8,7 @@ from carla.client import make_carla_client
 from carla.tcp import TCPConnectionError
 
 from collect import collect
-
+import os
 
 class Arguments():
     # Some replacement to the arguments input to simplify the interface.
@@ -44,14 +44,9 @@ def execute_collector(args):
 
 # open a carla docker with the container_name
 def open_carla(port, town_name, gpu, container_name):
-    sp = subprocess.Popen(
-        ['docker', 'run', '--rm', '-d', '-p',
-         str(port) + '-' + str(port + 2) + ':' + str(port) + '-' + str(port + 2),
-         '--runtime=nvidia', '-e', 'NVIDIA_VISIBLE_DEVICES=' + str(gpu), container_name,
-         '/bin/bash', 'CarlaUE4.sh', '/Game/Maps/' + town_name, '-windowed',
-         '-benchmark', '-fps=10', '-world-port=' + str(port)], shell=False,
-        stdout=subprocess.PIPE)
-
+    sp = subprocess.Popen(['docker', 'run', '--rm', '-d', '-p', str(port) + '-' + str(port + 2) + ':' + str(port) + '-' + str(port + 2),
+	         '--runtime=nvidia', '-e', 'NVIDIA_VISIBLE_DEVICES=' + str(gpu), container_name, '/bin/bash', 'CarlaUE4.sh', '/Game/Maps/' + town_name, '-windowed',
+	         '-benchmark', '-fps=10', '-world-port=' + str(port)], shell=False, stdout=subprocess.PIPE)
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser(
@@ -79,7 +74,7 @@ if __name__ == '__main__':
     argparser.add_argument(
         '-d', '--data-configuration-name',
         dest='data_configuration_name',
-        default='coil_training_dataset',
+        default='cilrs_training_dataset',
         help=' the first episode')
     argparser.add_argument(
         '-pt', '--data-path',
@@ -104,9 +99,11 @@ if __name__ == '__main__':
     for i in range(args.number_collectors):
         port = 2000 + i * 3
         gpu = str(int(i / args.carlas_per_gpu))
+        if not os.path.exists(os.path.join(args.data_path, 'part_'+str(i))):
+            os.mkdir(os.path.join(args.data_path, 'part_'+str(i)))
         collector_args = Arguments(port, args.number_episodes,
                                    args.start_episode + (args.number_episodes) * (i),
-                                   args.data_path,
+                                   os.path.join(args.data_path, 'part_'+str(i)),
                                    args.data_configuration_name)
         execute_collector(collector_args)
         open_carla(port, town_name, gpu, args.container_name)

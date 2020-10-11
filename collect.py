@@ -17,6 +17,7 @@ import argparse
 import logging
 import random
 import time
+import subprocess
 
 try:
     import numpy as np
@@ -305,18 +306,18 @@ def collect(client, args):
                 objects_to_render['route'] = None
 
                 # Render with the provided map
-                carla_game.render(sensor_data['CameraRGB'], objects_to_render)
+                carla_game.render(sensor_data['CentralRGB'], objects_to_render)
 
             # Check two important conditions for the episode, if it has ended
             # and if the episode was a success
-            episode_ended = collision_checker.test_collision(measurements.player_measurements) or \
+            # There is a bug in collision_checker that we have to check for collision only once at each frame
+            is_collision = collision_checker.test_collision(measurements.player_measurements)
+            episode_ended = is_collision or \
                             reach_timeout(measurements.game_timestamp / 1000.0,
                                           episode_aspects["timeout"]) or \
                             carla_game.is_reset(measurements.player_measurements.transform.location)
-            episode_success = not (collision_checker.test_collision(
-                                   measurements.player_measurements) or
-                                   reach_timeout(measurements.game_timestamp / 1000.0,
-                                                 episode_aspects["timeout"]))
+            episode_success = not (is_collision or reach_timeout(measurements.game_timestamp / 1000.0,
+                                                                 episode_aspects["timeout"]))
 
             # Check if there is collision
             # Start a new episode if there is a collision but repeat the same by not incrementing
@@ -328,7 +329,7 @@ def collect(client, args):
                 else:
                     # If the episode did go well and we were recording, delete this episode
                     if not args.not_record:
-                        writer.delete_episode(args.data_path, str(episode_number-1).zfill(5))
+                        writer.delete_episode(args.data_path, str(episode_number).zfill(5))
 
                 episode_lateral_noise, episode_longitudinal_noise = check_episode_has_noise(
                     settings_module.lat_noise_percent,
@@ -407,7 +408,7 @@ def main():
     argparser.add_argument(
         '--data-configuration-name',
         metavar='H',
-        default='coil_training_dataset_singlecamera',
+        default='cilrs_training_dataset',
         dest='data_configuration_name',
         help=' Name of the data configuration file that should be place on .dataset_configurations')
     argparser.add_argument(

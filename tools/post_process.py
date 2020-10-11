@@ -14,8 +14,9 @@ import os
 from collections import deque
 import scipy.ndimage
 
+import multiprocessing
 
-
+from tqdm import tqdm
 
 class Control:
     steer = 0
@@ -124,7 +125,71 @@ def reshape_images(image_type, episode, data_point_number):
 
 
 
+def execute_post_process(episodes_list, args):
+    p = multiprocessing.Process(target=post_process,
+                                args=(episodes_list, args,))
+    p.start()
 
+
+def post_process(episodes_list, args):
+
+    for episode in tqdm(episodes_list):
+        print('Episode ', episode)
+        if 'episode' not in episode:
+            episode = 'episode_' + episode
+
+        if os.path.exists(os.path.join(episode, "checked")) or os.path.exists(
+                os.path.join(episode, "processed2")) \
+                or os.path.exists(os.path.join(episode, "bad_episode")):
+            # Episode was not checked. So we dont load it.
+            print(" This episode was already checked ")
+            continue
+        # Take all the measurements from a list
+        try:
+            measurements_list = glob.glob(os.path.join(episode, 'measurement*'))
+            sort_nicely(measurements_list)
+            print(episode)
+
+
+            bad_episode = False
+            if len(measurements_list) <= 1:
+                print(" Episode is empty")
+                purge(episode, '.')
+                bad_episode = True
+                continue
+
+            for measurement in measurements_list[:-3]:
+
+                data_point_number = measurement.split('_')[-1].split('.')[0]
+
+                reshape_images("RGB", episode, data_point_number)
+
+            for measurement in measurements_list[-3:]:
+                data_point_number = measurement.split('_')[-1].split('.')[0]
+                purge(episode, "CentralRGB_" + data_point_number + '.png')
+                purge(episode, "LeftRGB_" + data_point_number + '.png')
+                purge(episode, "RightRGB_" + data_point_number + '.png')
+                os.remove(measurement)
+
+            if not bad_episode:
+                done_file = open(os.path.join(episode, "processed2"), 'w')
+                done_file.close()
+
+        except:
+            import traceback
+            traceback.print_exc()
+            print(" Error on processing")
+            done_file = open(os.path.join(episode, "bad"), 'w')
+            done_file.close()
+
+            continue
+
+        # The last one we delete
+        data_point_number = measurements_list[-1].split('_')[-1].split('.')[0]
+        print(data_point_number)
+        purge(episode, "CentralRGB_" + data_point_number + '.png')
+        purge(episode, "LeftRGB_" + data_point_number + '.png')
+        purge(episode, "RightRGB_" + data_point_number + '.png')
 
 
 # ***** main loop *****
@@ -147,19 +212,11 @@ if __name__ == "__main__":
         type=int,
         help=' the first episode'
     )
-    """ You should pass this extra arguments if you want to delete the semantic segmenation labels"""
     parser.add_argument(
-        '-ds', '--delete-semantic-segmentation',
-        dest='delete_semantic_segmentation',
-        action='store_true',
-        help='Flag to tell the system to NOT erase the semantic segmentation labels from the dataset'
-    )
-    """ You should pass this extra arguments if you want to delete the depth labels"""
-    parser.add_argument(
-        '-dd', '--delete-depth',
-        dest='delete_depth',
-        action='store_true',
-        help='Flag to tell the system to NOT erase the semantic segmentation labels from the dataset'
+        '-nw', '--num_workers',
+        default=12,
+        type=int,
+        help=' Number of workers to post-process dataset'
     )
 
     args = parser.parse_args()
@@ -172,131 +229,18 @@ if __name__ == "__main__":
     else:
         episodes_list = args.episodes
 
-    data_configuration_name = 'coil_training_dataset'
-    print ( data_configuration_name)
-    print ('dataset_configurations.' + (data_configuration_name) )
-    settings_module = __import__('dataset_configurations.' + (data_configuration_name),
-                                 fromlist=['dataset_configurations'] )
+    nepisodes_per_worker = len(episodes_list) // args.num_workers
 
-    first_time = True
-    count = 0
-    steering_pred = []
-    steering_gt = []
-    step_size = 1
-    image_queue = deque()
+    i = 0
+    for _ in range(args.num_workers)[:-1]:
+        print(f"executing worker {i}")
+        worker_episodes = episodes_list[i * nepisodes_per_worker: (i+1) * nepisodes_per_worker]
+        execute_post_process(worker_episodes, args)
+        i += 1
 
-    actions_queue = deque()
-
-    # Start a screen to show everything. The way we work is that we do IMAGES x Sensor.
-    # But maybe a more arbitrary configuration may be useful
-
-    ts = []
-
-
-    for episode in episodes_list[args.start_episode:]:
-        print ('Episode ', episode)
-        if 'episode' not in episode:
-            episode = 'episode_' + episode
-
-        if os.path.exists(os.path.join(episode, "checked")) or os.path.exists(
-                os.path.join(episode, "processed2")) \
-                or os.path.exists(os.path.join(episode, "bad_episode")):
-            # Episode was not checked. So we dont load it.
-            print(" This episode was already checked ")
-            continue
-        # Take all the measurements from a list
-        try:
-            measurements_list = glob.glob(os.path.join(episode, 'measurement*'))
-            sort_nicely(measurements_list)
-            print (" Purging other data")
-            print ("Lidar")
-            purge(episode, "Lidar*")
-
-            print (episode)
-            if args.delete_depth:
-                print ("***Depth***")
-                purge(episode, "CentralDepth*")
-                purge(episode, "LeftDepth*")
-                purge(episode, "RightDepth*")
-
-            if args.delete_semantic_segmentation:
-                print ("***Purging SemanticSeg***")
-                purge(episode, "CentralSemanticSeg*")
-                purge(episode, "LeftSemanticSeg*")
-                purge(episode, "RightSemanticSeg*")
-
-            bad_episode = False
-            if len(measurements_list) <= 1:
-                print (" Episode is empty")
-                purge(episode, '.')
-                bad_episode = True
-                continue
-
-            for measurement in measurements_list[:-3]:
-
-                data_point_number = measurement.split('_')[-1].split('.')[0]
-
-                with open(measurement) as f:
-                    measurement_data = json.load(f)
-
-                reshape_images("RGB", episode, data_point_number)
-                if not args.delete_depth:
-                    reshape_images("SemanticSeg", episode, data_point_number)
-
-                if not args.delete_depth:
-                    reshape_images("Depth", episode, data_point_number)
-
-                if 'forwardSpeed' in  measurement_data['playerMeasurements']:
-                    speed = measurement_data['playerMeasurements']['forwardSpeed']
-                else:
-                    speed = 0
-
-                float_dicts = {'steer': measurement_data['steer'],
-                               'throttle': measurement_data['throttle'],
-                               'brake': measurement_data['brake'],
-                               'speed_module': speed,
-                               'directions': measurement_data['directions'],
-                               "pedestrian": measurement_data['stop_pedestrian'],
-                               "traffic_lights": measurement_data['stop_traffic_lights'],
-                               "vehicle": measurement_data['stop_vehicle'],
-                               'angle': -30.0}
-
-
-            for measurement in measurements_list[-3:]:
-                data_point_number = measurement.split('_')[-1].split('.')[0]
-                purge(episode, "CentralRGB_" + data_point_number + '.png')
-                purge(episode, "LeftRGB_" + data_point_number + '.png')
-                purge(episode, "RightRGB_" + data_point_number + '.png')
-                purge(episode, "CentralSemanticSeg_" + data_point_number + '.png')
-                purge(episode, "LeftSemanticSeg_" + data_point_number + '.png')
-                purge(episode, "RightSemanticSeg_" + data_point_number + '.png')
-                purge(episode, "CentralDepth_" + data_point_number + '.png')
-                purge(episode, "LeftDepth_" + data_point_number + '.png')
-                purge(episode, "RightDepth_" + data_point_number + '.png')
-                os.remove(measurement)
-
-            if not bad_episode:
-                done_file = open(os.path.join(episode, "processed2"), 'w')
-                done_file.close()
-
-        except:
-            import traceback
-            traceback.print_exc()
-            print (" Error on processing")
-            done_file = open(os.path.join(episode, "bad"), 'w')
-            done_file.close()
-
-            continue
-
-
-
-
-        # The last one we delete
-        data_point_number = measurements_list[-1].split('_')[-1].split('.')[0]
-        print (data_point_number)
-        purge(episode, "CentralRGB_" + data_point_number + '.png')
-        purge(episode, "LeftRGB_" + data_point_number + '.png')
-        purge(episode, "RightRGB_" + data_point_number + '.png')
+    print(f"executing worker {i}")
+    worker_episodes = episodes_list[(i+1) * nepisodes_per_worker:]
+    execute_post_process(worker_episodes, args)
 
 
 
